@@ -80,12 +80,81 @@ const Bullet = struct {
 };
 var bullet: ?Bullet = null;
 
-var player: struct {
+const Player = struct {
     circle: Circle,
     angle: f32,
     velocity: [2]f32,
     damaged: bool,
-} = .{
+    fn rotate(player: *Player, angle: f32, dt: f32) void {
+        player.angle += angle * dt;
+        player.angle = @mod(player.angle, std.math.tau);
+        if (player.angle < 0.0) player.angle += std.math.tau;
+    }
+    fn shoot(player: *Player) void {
+        var u = [2]f32{
+            std.math.cos(player.angle),
+            std.math.sin(player.angle),
+        };
+        var v = mul(player.circle.radius, u);
+        var eye_position = add(player.circle.center, v);
+        bullet = Bullet{ .position = eye_position, .velocity = mul(1000, u) };
+    }
+    fn render(player: *Player) SdlError!void {
+        var eye_position = add(player.circle.center, polarVector(player.circle.radius, player.angle));
+        const delta = 1.0 / 4.0 + 1.0 / 8.0;
+        var left_wing = add(player.circle.center, polarVector(player.circle.radius, player.angle + delta * std.math.tau));
+        var right_wing = add(player.circle.center, polarVector(player.circle.radius, player.angle - delta * std.math.tau));
+        var points = [_][2]f32{ eye_position, left_wing, right_wing };
+
+        var color: struct {
+            r: u8,
+            g: u8,
+            b: u8,
+        } = .{ .r = 0, .g = 255, .b = 0 };
+        if (player.damaged) {
+            color = .{
+                .r = 255,
+                .g = 0,
+                .b = 0,
+            };
+        }
+        inline for (.{ 0, 1, 2 }) |i| {
+            inline for (.{ 0, 1, 2 }) |j| {
+                if (i < j) {
+                    try renderLineTorus(points[i], points[j], .{ .r = color.r, .g = color.g, .b = color.b });
+                }
+            }
+        }
+        try renderCircleTorus(player.circle, .{ .r = 255, .g = 255, .b = 0 });
+        if (bullet) |real_bullet| {
+            try renderCircleTorus(Circle{ .center = real_bullet.position, .radius = 5 }, .{ .r = 255, .g = 255, .b = 0 });
+        }
+    }
+
+    fn push(player: *Player, dt: f32, mag: f32) void {
+        var u = [2]f32{ std.math.cos(player.angle), std.math.sin(player.angle) };
+        player.velocity = add(player.velocity, mul(dt * mag, u));
+    }
+
+    fn move(player: *Player, dt: f32) void {
+        player.circle.center = donut(add(player.circle.center, mul(dt, player.velocity)));
+        const velocity_magnitude = magnitude(player.velocity);
+        if (velocity_magnitude < 0.00001) {
+            player.velocity = [2]f32{ 0, 0 };
+        } else {
+            const friction = 100.0;
+            const friction_velocity_magnitude = std.math.max(0, velocity_magnitude - dt * friction);
+            player.velocity = mul(friction_velocity_magnitude / velocity_magnitude, player.velocity);
+        }
+        if (bullet) |*real_bullet| {
+            real_bullet.position = add(real_bullet.position, mul(dt, real_bullet.velocity));
+            if (real_bullet.position[0] < 0 or real_bullet.position[0] > window_width or
+                real_bullet.position[1] < 0 or real_bullet.position[1] > window_height)
+                bullet = null;
+        }
+    }
+};
+var playerOne = Player{
     .circle = Circle{
         .center = [2]f32{ 400, 400 },
         .radius = 12,
@@ -94,56 +163,11 @@ var player: struct {
     .velocity = [2]f32{ 0, 0 },
     .damaged = false,
 };
-fn playerRotate(angle: f32, dt: f32) void {
-    player.angle += angle * dt;
-    player.angle = @mod(player.angle, std.math.tau);
-    if (player.angle < 0.0) player.angle += std.math.tau;
-}
-fn playerShoot() void {
-    var u = [2]f32{
-        std.math.cos(player.angle),
-        std.math.sin(player.angle),
-    };
-    var v = mul(player.circle.radius, u);
-    var eye_position = add(player.circle.center, v);
-    bullet = Bullet{ .position = eye_position, .velocity = mul(1000, u) };
-}
 fn polarVector(mag: f32, angle: f32) [2]f32 {
     return [2]f32{
         mag * std.math.cos(angle),
         mag * std.math.sin(angle),
     };
-}
-fn playerRender() SdlError!void {
-    var eye_position = add(player.circle.center, polarVector(player.circle.radius, player.angle));
-    const delta = 1.0 / 4.0 + 1.0 / 8.0;
-    var left_wing = add(player.circle.center, polarVector(player.circle.radius, player.angle + delta * std.math.tau));
-    var right_wing = add(player.circle.center, polarVector(player.circle.radius, player.angle - delta * std.math.tau));
-    var points = [_][2]f32{ eye_position, left_wing, right_wing };
-
-    var color: struct {
-        r: u8,
-        g: u8,
-        b: u8,
-    } = .{ .r = 0, .g = 255, .b = 0 };
-    if (player.damaged) {
-        color = .{
-            .r = 255,
-            .g = 0,
-            .b = 0,
-        };
-    }
-    inline for (.{ 0, 1, 2 }) |i| {
-        inline for (.{ 0, 1, 2 }) |j| {
-            if (i < j) {
-                try renderLineTorus(points[i], points[j], .{ .r = color.r, .g = color.g, .b = color.b });
-            }
-        }
-    }
-    try renderCircleTorus(player.circle, .{ .r = 255, .g = 255, .b = 0 });
-    if (bullet) |real_bullet| {
-        try renderCircleTorus(Circle{ .center = real_bullet.position, .radius = 5 }, .{ .r = 255, .g = 255, .b = 0 });
-    }
 }
 fn renderCircleTorus(circle: Circle, color: struct { r: u8, g: u8, b: u8 }) SdlError!void {
     inline for (.{ -1, 0, 1 }) |dx| {
@@ -207,27 +231,6 @@ fn circleTorusIntersects(c1: Circle, c2: Circle) bool {
         }
     }
     return false;
-}
-fn playerPush(dt: f32, mag: f32) void {
-    var u = [2]f32{ std.math.cos(player.angle), std.math.sin(player.angle) };
-    player.velocity = add(player.velocity, mul(dt * mag, u));
-}
-fn playerMove(dt: f32) void {
-    player.circle.center = donut(add(player.circle.center, mul(dt, player.velocity)));
-    const velocity_magnitude = magnitude(player.velocity);
-    if (velocity_magnitude < 0.00001) {
-        player.velocity = [2]f32{ 0, 0 };
-    } else {
-        const friction = 100.0;
-        const friction_velocity_magnitude = std.math.max(0, velocity_magnitude - dt * friction);
-        player.velocity = mul(friction_velocity_magnitude / velocity_magnitude, player.velocity);
-    }
-    if (bullet) |*real_bullet| {
-        real_bullet.position = add(real_bullet.position, mul(dt, real_bullet.velocity));
-        if (real_bullet.position[0] < 0 or real_bullet.position[0] > window_width or
-            real_bullet.position[1] < 0 or real_bullet.position[1] > window_height)
-            bullet = null;
-    }
 }
 
 inline fn square_distance(a: [2]f32, b: [2]f32) f32 {
@@ -353,7 +356,7 @@ fn process_events() bool {
             sdl.SDL_QUIT => return true,
             sdl.SDL_KEYDOWN => {
                 if (@enumToInt(event.key.keysym.scancode) == sdl.SDL_SCANCODE_SPACE) {
-                    playerShoot();
+                    playerOne.shoot();
                 }
             },
             else => {},
@@ -363,17 +366,17 @@ fn process_events() bool {
 }
 
 fn tick(dt: f32) void {
-    if (key_state.?[sdl.SDL_SCANCODE_W] != 0) playerPush(dt, 500.0);
-    if (key_state.?[sdl.SDL_SCANCODE_S] != 0) playerPush(dt, -500.0);
-    if (key_state.?[sdl.SDL_SCANCODE_D] != 0) playerRotate(5, dt);
-    if (key_state.?[sdl.SDL_SCANCODE_A] != 0) playerRotate(-5, dt);
-    playerMove(dt);
-    player.damaged = false;
+    if (key_state.?[sdl.SDL_SCANCODE_W] != 0) playerOne.push(dt, 500.0);
+    if (key_state.?[sdl.SDL_SCANCODE_S] != 0) playerOne.push(dt, -500.0);
+    if (key_state.?[sdl.SDL_SCANCODE_D] != 0) playerOne.rotate(5, dt);
+    if (key_state.?[sdl.SDL_SCANCODE_A] != 0) playerOne.rotate(-5, dt);
+    playerOne.move(dt);
+    playerOne.damaged = false;
     for (asteroids) |*maybe_asteroid| {
         if (maybe_asteroid.*) |*asteroid| {
             asteroid.circle.center = donut(add(asteroid.circle.center, mul(dt, asteroid.velocity)));
-            if (asteroid.circle.intersects(player.circle))
-                player.damaged = true;
+            if (asteroid.circle.intersects(playerOne.circle))
+                playerOne.damaged = true;
         }
     }
     doAsteroidBulletCollision(dt) catch |collision_error| switch (collision_error) {
@@ -389,7 +392,7 @@ fn render() SdlError!void {
         return error.SdlError;
     if (sdl.SDL_RenderClear(renderer) != 0)
         return error.SdlError;
-    try playerRender();
+    try playerOne.render();
     for (asteroids) |maybe_asteroid| {
         if (maybe_asteroid) |asteroid| {
             try renderCircleTorus(asteroid.circle, .{ .r = 255, .g = 255, .b = 255 });
